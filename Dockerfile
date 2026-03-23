@@ -14,6 +14,8 @@ ARG FASTEN_ENV=sandbox
 WORKDIR /usr/src/fastenhealth/frontend
 COPY frontend/package.json frontend/yarn.lock ./
 
+# Rewrite SSH GitHub URLs to HTTPS so yarn can fetch deps without SSH keys in CI/Docker
+RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 RUN yarn install --frozen-lockfile
 COPY frontend/ ./
 RUN --mount=type=cache,target=/tmp/lock,sharing=locked \

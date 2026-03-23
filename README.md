@@ -220,6 +220,47 @@ docker run --rm \
 ghcr.io/fastenhealth/fasten-onprem:main
 ```
 
+### Building and pushing a custom image
+
+To build a local image from source:
+
+```bash
+docker build -t fasten-custom .
+docker run --rm -p 9090:8080 \
+  -v ./db:/opt/fasten/db \
+  -v ./cache:/opt/fasten/cache \
+  fasten-custom
+```
+
+To push to Docker Hub (replace `yourusername` with your Docker Hub username):
+
+```bash
+# Log in
+docker login
+
+# Tag and push (native arch)
+docker tag fasten-custom yourusername/fasten-custom:latest
+docker push yourusername/fasten-custom:latest
+```
+
+**Building for a specific platform (e.g. linux/amd64 from an Apple Silicon Mac):**
+
+```bash
+# Build and push directly for amd64
+docker buildx build \
+  --platform linux/amd64 \
+  -t yourusername/fasten-custom:latest \
+  --push .
+
+# Or build a multi-arch manifest (amd64 + arm64)
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t yourusername/fasten-custom:latest \
+  --push .
+```
+
+> ℹ️ The Dockerfile uses `--frozen-lockfile` during the frontend build. A `git config` line rewrites SSH GitHub dependency URLs to HTTPS so the build works without SSH keys in Docker/CI environments.
+
 At this point you'll be redirected to the login page.
 
 ### Logging In
