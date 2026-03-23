@@ -66,6 +66,24 @@
 
       <!-- AG Grid table -->
       <div *ngIf="!loading && !isEmptyReport">
+        <!-- Page size selector -->
+        <div class="d-flex justify-content-end align-items-center mb-2" style="gap: 8px;">
+          <span class="tx-sm tx-color-03">Rows per page:</span>
+          <div ngbDropdown class="d-inline-block">
+            <button type="button" class="btn btn-sm btn-outline-secondary" ngbDropdownToggle>
+              {{ paginationPageSize }}
+            </button>
+            <div ngbDropdownMenu>
+              <button *ngFor="let size of pageSizeOptions"
+                ngbDropdownItem
+                [class.active]="paginationPageSize === size"
+                (click)="onPageSizeChanged(size)">
+                {{ size }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <ag-grid-angular
           [class]="isDarkMode ? 'ag-theme-alpine-dark' : 'ag-theme-alpine'"
           style="width: 100%;"
@@ -73,12 +91,12 @@
           [rowData]="rowData"
           [columnDefs]="columnDefs"
           [defaultColDef]="defaultColDef"
-          [isFullWidthRow]="isFullWidthRow"
-          [fullWidthCellRenderer]="fullWidthCellRenderer"
           [getRowId]="getRowId"
           [getRowClass]="getRowClass"
           [getRowHeight]="getRowHeight"
           [animateRows]="true"
+          [pagination]="true"
+          [paginationPageSize]="paginationPageSize"
           (gridReady)="onGridReady($event)"
           (rowClicked)="onRowClicked($event)"
         ></ag-grid-angular>

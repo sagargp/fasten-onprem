@@ -14,7 +14,7 @@ import { ResourceType } from '../../../lib/models/constants';
 import { ObservationModel } from '../../../lib/models/resources/observation-model';
 import {
   ColDef, GridApi, GridReadyEvent, RowClickedEvent,
-  GetRowIdParams, IsFullWidthRowParams, RowClassParams
+  GetRowIdParams, RowClassParams
 } from 'ag-grid-community';
 import { LabChartDetailComponent } from './lab-chart-detail.component';
 
@@ -29,14 +29,14 @@ class LabResultCodeByDate {
 }
 
 export interface LabRow {
-  type: 'data' | 'detail'
   code: string
   name: string
   panel: string
   result: string
   date: Date | null
   models: ObservationModel[]
-  onGlossaryToggle?: (code: string, open: boolean) => void
+  isExpanded?: boolean
+  glossaryOpen?: boolean
 }
 
 @Component({
@@ -62,8 +62,9 @@ export class ReportLabsComponent implements OnInit {
   // AG Grid
   rowData: LabRow[] = []
   private gridApi: GridApi
-  private expandedCodes: Set<string> = new Set()
-  private glossaryOpenMap: Map<string, boolean> = new Map()
+
+  paginationPageSize: number = 15
+  pageSizeOptions: number[] = [15, 25, 50, 100, 250]
   // map from observation source_resource_id → panel name
   private panelMap: Map<string, string> = new Map()
 
@@ -74,11 +75,10 @@ export class ReportLabsComponent implements OnInit {
       filter: 'agTextColumnFilter',
       filterParams: { buttons: ['reset'], debounceMs: 200 },
       flex: 3,
-      cellRenderer: (params) => {
-        if (params.data?.type === 'detail') return ''
-        const isOpen = this.expandedCodes.has(params.data?.code)
-        return `<span style="cursor:pointer">${isOpen ? '▾' : '▸'} ${params.value || ''}</span>`
-      }
+      cellRenderer: LabChartDetailComponent,
+      cellStyle: { padding: '0', overflow: 'hidden' },
+      // When expanded, span all 4 columns so the chart fills the full row width
+      colSpan: (params) => params.data?.isExpanded ? 4 : 1,
     },
     {
       headerName: 'Panel',
@@ -120,16 +120,11 @@ export class ReportLabsComponent implements OnInit {
     resizable: true,
   }
 
-  // full-width detail row config
-  fullWidthCellRenderer = LabChartDetailComponent
-  isFullWidthRow = (params: IsFullWidthRowParams) => params.rowNode.data?.type === 'detail'
-  getRowId = (params: GetRowIdParams) => `${params.data.type}-${params.data.code}`
-  getRowClass = (params: RowClassParams) => params.data?.type === 'data' ? 'ag-row-clickable' : 'ag-row-detail-full'
+  getRowId = (params: GetRowIdParams) => params.data.code
+  getRowClass = (_params: RowClassParams) => 'ag-row-clickable'
   getRowHeight = (params) => {
-    if (params.data?.type !== 'detail') return 42
-    const glossaryOpen = this.glossaryOpenMap.get(params.data?.code)
-    if (glossaryOpen) return 650
-    // base: padding + title + chart (scales with # of data points)
+    if (!params.data?.isExpanded) return 42
+    if (params.data?.glossaryOpen) return 650
     const pointCount = (params.data?.models?.length ?? 1)
     return 100 + pointCount * 40 + 80
   }
@@ -167,47 +162,22 @@ export class ReportLabsComponent implements OnInit {
     this.gridApi = params.api
   }
 
+  onPageSizeChanged(size: number): void {
+    this.paginationPageSize = size
+    this.gridApi?.paginationSetPageSize(size)
+  }
+
   onRowClicked(event: RowClickedEvent): void {
     const data = event.data as LabRow
-    if (!data || data.type === 'detail') return
+    if (!data) return
 
-    if (this.expandedCodes.has(data.code)) {
-      // collapse
-      this.expandedCodes.delete(data.code)
-      this.glossaryOpenMap.delete(data.code)
-      const removeRow = this.rowData.find(r => r.type === 'detail' && r.code === data.code)
-      if (removeRow) {
-        this.rowData = this.rowData.filter(r => r !== removeRow)
-        this.gridApi.applyTransaction({ remove: [removeRow] })
-      }
-    } else {
-      // expand: insert detail row immediately after this data row
-      this.expandedCodes.add(data.code)
-      const idx = this.rowData.findIndex(r => r.code === data.code && r.type === 'data')
-      if (idx >= 0) {
-        const detailRow: LabRow = {
-          // mirror parent's filterable fields so this row passes all active column filters
-          type: 'detail', code: data.code,
-          name: data.name, panel: data.panel,
-          result: data.result, date: data.date,
-          models: data.models,
-          onGlossaryToggle: (code, open) => {
-            this.glossaryOpenMap.set(code, open)
-            this.gridApi?.resetRowHeights()
-          }
-        }
-        this.rowData.splice(idx + 1, 0, detailRow)
-        this.gridApi.applyTransaction({ add: [detailRow], addIndex: idx + 1 })
-
-        // scroll so the chart is visible
-        setTimeout(() => {
-          const node = this.gridApi.getRowNode(`detail-${data.code}`)
-          if (node) this.gridApi.ensureNodeVisible(node, 'middle')
-        }, 50)
-      }
+    data.isExpanded = !data.isExpanded
+    if (!data.isExpanded) {
+      data.glossaryOpen = false
     }
-    // refresh the data row so the arrow icon updates
-    this.gridApi?.refreshCells({ rowNodes: [event.node], force: true })
+
+    this.gridApi?.resetRowHeights()
+    this.gridApi?.redrawRows({ rowNodes: [event.node] })
   }
 
   private loadRowsForCodes(codes: string[]): void {
@@ -229,7 +199,6 @@ export class ReportLabsComponent implements OnInit {
         }, '')
 
         rows.push({
-          type: 'data',
           code,
           name: info.observationGroupTitles[code] || code,
           panel: panel ? this.toTitleCase(panel) : '',
@@ -247,7 +216,6 @@ export class ReportLabsComponent implements OnInit {
       })
 
       this.rowData = rows
-      this.expandedCodes = new Set()
       this.isEmptyReport = rows.length === 0
     }, () => {
       this.loading = false
@@ -341,7 +309,7 @@ export class ReportLabsComponent implements OnInit {
     // Collect only data rows that survive the current filter
     const rows: LabRow[] = []
     this.gridApi.forEachNodeAfterFilter(node => {
-      if (node.data?.type === 'data') rows.push(node.data as LabRow)
+      if (node.data) rows.push(node.data as LabRow)
     })
 
     const doc = new jsPDF({ orientation: 'landscape' })
@@ -351,9 +319,9 @@ export class ReportLabsComponent implements OnInit {
     doc.text('Lab Results', 14, 16)
     doc.setFontSize(10)
     doc.setTextColor(120)
-    const filterActive = rows.length < this.rowData.filter(r => r.type === 'data').length
+    const filterActive = rows.length < this.rowData.length
     doc.text(
-      filterActive ? `Filtered: ${rows.length} of ${this.rowData.filter(r => r.type === 'data').length} labs` : `${rows.length} labs`,
+      filterActive ? `Filtered: ${rows.length} of ${this.rowData.length} labs` : `${rows.length} labs`,
       14, 22
     )
     doc.text(`Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 14, 28)
