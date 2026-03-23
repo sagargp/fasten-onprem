@@ -1,6 +1,7 @@
 <div class="az-content">
   <div class="container">
-    <div class="az-content-body d-flex flex-column">
+    <app-medical-sources-filter [categories]="resultLimits.categoryBuckets" [platformTypes]="resultLimits.platformTypesBuckets"></app-medical-sources-filter>
+    <div class="az-content-body pd-lg-l-40 d-flex flex-column">
       <div class="az-content-breadcrumb">
         <span>Medical Sources</span>
       </div>
@@ -44,6 +45,56 @@
           </div>
         </div><!-- col -->
       </div><!-- row -->
+
+      <hr class="mg-y-30">
+
+      <div class="az-content-label mg-b-5">Healthcare Companies</div>
+      <p class="mg-b-20">The following medical companies have API's which Fasten can use to retrieve your medical history.
+        Please click the logos below to initiate the connection.</p>
+
+      <!-- Search -->
+      <div class="row row-sm sticky-top pt-2" style="position:sticky;">
+        <div class="col-lg-8">
+          <div class="input-group mb-3">
+            <div class="input-group-prepend">
+              <span class="input-group-text" id="search-prefix">Search</span>
+            </div>
+            <input [ngModel]="searchTermUpdate | async" (keyup)="searchTermUpdate.next($event.target.value)" type="text" class="form-control" placeholder="Search Term">
+            <div class="input-group-append">
+              <span class="input-group-text">{{this.availableLighthouseBrandList.length}} of {{this.resultLimits.totalItems}} results</span>
+            </div>
+
+          </div><!-- input-group -->
+        </div><!-- col -->
+      </div>
+
+
+      <div *ngIf="!loading || availableLighthouseBrandList.length > 0 else isLoadingTemplate" class="row row-sm"
+           infiniteScroll
+           [infiniteScrollDistance]="2"
+           [infiniteScrollThrottle]="50"
+           (scrolled)="onScroll()"
+      >
+
+        <app-medical-sources-card class="col-sm-3 mg-b-20 px-3"
+
+          *ngFor="let lighthouseBrand of availableLighthouseBrandList"
+          [sourceInfo]="lighthouseBrand"
+          [status]="status[lighthouseBrand.brand.id]"
+          (onClick)="connectModalHandler(contentModalRef, $event)"
+        ></app-medical-sources-card>
+
+        <div *ngIf="availableLighthouseBrandList.length == 0" class="mg-b-60 w-100">
+          <div class="card card-body bg-gray-200 bd-0">
+            <p class="card-text">
+              <strong>No results</strong> Try another search term or <a (click)="showRequestHealthSystemModal()" class="link">request this health system</a>.
+            </p>
+          </div>
+        </div>
+
+      </div><!-- row -->
+
+      <div class="ht-40"></div>
 
     </div><!-- az-content-body -->
   </div><!-- container -->

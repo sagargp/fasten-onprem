@@ -2,112 +2,87 @@
   <div class="container">
     <div class="az-content-body">
 
-      <!-- Header Row -->
-      <report-header [reportHeaderTitle]="'Labs'" [reportHeaderSubTitle]="'The Lab report turns data into meaningful information'" ></report-header>
+      <!-- Header -->
+      <report-header
+        [reportHeaderTitle]="'Labs'"
+        [reportHeaderSubTitle]="'The Lab report turns data into meaningful information'"
+        [customPdfExport]="labsPdfExport">
+      </report-header>
 
-      <ng-container [ngTemplateOutlet]="loading ? isLoadingTemplate : isEmptyReport ? emptyReport : report"></ng-container>
-
-      <ng-template #report>
-
-        <!-- Report Details -->
-        <div class="row" *ngIf="reportDisplayModel">
-          <div class="col-12 mt-3 mb-3">
-            <h1 class="az-dashboard-title">Report Info</h1>
-          </div>
-          <div class="col-12">
-            <fhir-card [displayModel]="reportDisplayModel" [showDetails]="true"></fhir-card>
-          </div>
+      <!-- Single-report details -->
+      <div class="row" *ngIf="reportDisplayModel">
+        <div class="col-12 mt-3 mb-3">
+          <h1 class="az-dashboard-title">Report Info</h1>
         </div>
+        <div class="col-12">
+          <fhir-card [displayModel]="reportDisplayModel" [showDetails]="true"></fhir-card>
+        </div>
+      </div>
 
-
-
-        <!-- Observations Title -->
-        <div class="row mt-5 mb-3">
-          <div class="col-6">
-            <h1 class="az-dashboard-title">Observations</h1>
-          </div>
-          <div class="col-6">
-
-            <div ngbDropdown class="d-inline-block float-right dropdown ml-3">
-              <button type="button" class="btn btn-outline-indigo" id="dropdownReports" ngbDropdownToggle>
-                Included Reports
-              </button>
-              <div ngbDropdownMenu aria-labelledby="dropdownReports">
-                <button ngbDropdownItem
-                        [class.active]="!reportSourceId && !reportResourceType && !reportResourceId"
-                        [routerLink]="'/labs'"
-                >All</button>
-                <button ngbDropdownItem [disabled]="true">-----</button>
-                <button
-                  [class.active]="reportSourceId == diagnosticReport?.source_id && reportResourceType == diagnosticReport?.source_resource_type && reportResourceId == diagnosticReport?.source_resource_id"
-                  *ngFor="let diagnosticReport of diagnosticReports" ngbDropdownItem
-                  [routerLink]="'/labs/report/'+ diagnosticReport?.source_id + '/' + diagnosticReport?.source_resource_type + '/' + diagnosticReport?.source_resource_id"
-                >{{diagnosticReport?.sort_title}} [{{diagnosticReport?.sort_date | amDateFormat: 'LL'}}]</button>
-              </div>
-            </div>
-            <div ngbDropdown class="d-inline-block float-right">
-              <button ngbTooltip="not yet implemented" type="button" class="btn btn-outline-indigo" id="dropdownSort" ngbDropdownToggle>
-                Sort By
-              </button>
-              <div ngbDropdownMenu aria-labelledby="dropdownSort">
-                <button ngbDropdownItem class="active">Date</button>
-                <button ngbDropdownItem>Name</button>
-                <button ngbDropdownItem>Status</button>
-              </div>
+      <!-- Toolbar: title + included-reports dropdown -->
+      <div class="row mt-5 mb-3 align-items-center">
+        <div class="col-6">
+          <h1 class="az-dashboard-title">Observations</h1>
+        </div>
+        <div class="col-6 d-flex justify-content-end" style="gap:8px">
+          <div ngbDropdown class="d-inline-block">
+            <button type="button" class="btn btn-outline-indigo" id="dropdownReports" ngbDropdownToggle>
+              Included Reports
+            </button>
+            <div ngbDropdownMenu aria-labelledby="dropdownReports">
+              <button ngbDropdownItem
+                [class.active]="!reportSourceId && !reportResourceType && !reportResourceId"
+                [routerLink]="'/labs'">All</button>
+              <button ngbDropdownItem [disabled]="true">-----</button>
+              <button
+                *ngFor="let diagnosticReport of diagnosticReports"
+                [class.active]="reportSourceId == diagnosticReport?.source_id && reportResourceType == diagnosticReport?.source_resource_type && reportResourceId == diagnosticReport?.source_resource_id"
+                ngbDropdownItem
+                [routerLink]="'/labs/report/' + diagnosticReport?.source_id + '/' + diagnosticReport?.source_resource_type + '/' + diagnosticReport?.source_resource_id"
+              >{{diagnosticReport?.sort_title}} [{{diagnosticReport?.sort_date | amDateFormat: 'LL'}}]</button>
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- Observations List -->
-        <app-report-labs-observation *ngFor="let observationGroup of observationGroups |  keyvalue"
-                                     [observations]="observationGroup.value"
-                                     [observationCode]="observationGroup.key"
-                                     [observationTitle]="observationGroupTitles[observationGroup.key]"
-        ></app-report-labs-observation>
-
-
-        <!-- Pagination -->
-        <div class="row">
-          <div class="col-12 d-flex justify-content-center flex-nowrap">
-            <ngb-pagination
-              [collectionSize]="allObservationGroups.length"
-              [maxSize]="15"
-              [(page)]="currentPage"
-              [pageSize]="pageSize"
-              (pageChange)="populateObservationsForCurrentPage()"
-            >
-            </ngb-pagination>
-          </div>
+      <!-- Loading -->
+      <div class="row" *ngIf="loading">
+        <div class="col-12">
+          <app-loading-spinner [loadingTitle]="'Please wait, loading report...'"></app-loading-spinner>
         </div>
+      </div>
 
-      </ng-template>
-
-
-      <ng-template #isLoadingTemplate>
-        <div class="row">
-          <div class="col-12">
-            <app-loading-spinner [loadingTitle]="'Please wait, loading report...'"></app-loading-spinner>
-          </div>
+      <!-- Empty state -->
+      <div *ngIf="!loading && isEmptyReport" class="d-flex align-items-center" style="height:100%">
+        <div class="modal-body tx-center pd-y-20 pd-x-20">
+          <h4 class="tx-purple mg-b-20">No Lab Data Found!</h4>
+          <p class="mg-b-20 mg-x-20">
+            Fasten was unable to find any lab data from your connected sources. You may need to connect another source to import your Lab data.
+          </p>
+          <button [routerLink]="'/sources'" type="button" class="btn btn-purple pd-x-25">Add Source</button>
+          <button [routerLink]="'/resource/create'" type="button" class="btn btn-purple pd-x-25 mg-l-10">Add Condition</button>
         </div>
-      </ng-template>
+      </div>
 
-
-      <ng-template #emptyReport>
-        <div class="d-flex align-items-center" style="height:100%">
-          <div class="modal-body tx-center pd-y-20 pd-x-20">
-            <h4 class="tx-purple mg-b-20">No Lab Data Found!</h4>
-            <p class="mg-b-20 mg-x-20">
-              Fasten was unable to find any lab data from your connected sources. You may need to connect another source to import your Lab data.
-            </p>
-            <p class="mg-b-20 mg-x-20">
-              Click below to add a new healthcare provider to Fasten.
-            </p>
-            <button [routerLink]="'/sources'" type="button" class="btn btn-purple pd-x-25">Add Source</button>
-            <button [routerLink]="'/resource/create'" type="button" class="btn btn-purple pd-x-25 mg-l-10">Add Condition</button>
-
-          </div><!-- modal-body -->
-        </div>
-      </ng-template>
+      <!-- AG Grid table -->
+      <div *ngIf="!loading && !isEmptyReport">
+        <ag-grid-angular
+          [class]="isDarkMode ? 'ag-theme-alpine-dark' : 'ag-theme-alpine'"
+          style="width: 100%;"
+          domLayout="autoHeight"
+          [rowData]="rowData"
+          [columnDefs]="columnDefs"
+          [defaultColDef]="defaultColDef"
+          [isFullWidthRow]="isFullWidthRow"
+          [fullWidthCellRenderer]="fullWidthCellRenderer"
+          [getRowId]="getRowId"
+          [getRowClass]="getRowClass"
+          [getRowHeight]="getRowHeight"
+          [animateRows]="true"
+          (gridReady)="onGridReady($event)"
+          (rowClicked)="onRowClicked($event)"
+        ></ag-grid-angular>
+      </div>
 
     </div>
   </div>

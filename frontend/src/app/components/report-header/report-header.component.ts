@@ -16,6 +16,7 @@ export class ReportHeaderComponent implements OnInit {
   lastUpdated: Date = null
   @Input() reportHeaderTitle: string = ""
   @Input() reportHeaderSubTitle: string = "Organized by condition and encounters"
+  @Input() customPdfExport: (() => void) | null = null
   constructor(
     private fastenApi: FastenApiService,
   ) { }
@@ -47,9 +48,13 @@ export class ReportHeaderComponent implements OnInit {
       }
     })
   }
-  getIPSExport(event: Event){
+  onExportPdf(event: Event){
     event.preventDefault()
-    return this.fastenApi.getIPSExport("pdf")
+    if (this.customPdfExport) {
+      this.customPdfExport()
+    } else {
+      this.fastenApi.getIPSExport("pdf")
+    }
   }
 
 }

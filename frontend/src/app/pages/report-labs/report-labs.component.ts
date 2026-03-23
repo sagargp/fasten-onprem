@@ -1,26 +1,43 @@
 import { Component, OnInit } from '@angular/core';
-import {FastenApiService} from '../../services/fasten-api.service';
-import {NgbModal} from '@ng-bootstrap/ng-bootstrap';
-import {ResourceFhir} from '../../models/fasten/resource_fhir';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import { FastenApiService } from '../../services/fasten-api.service';
+import { ResourceFhir } from '../../models/fasten/resource_fhir';
 import * as fhirpath from 'fhirpath';
-import {forkJoin, Observable} from 'rxjs';
-import {flatMap, map, mergeMap} from 'rxjs/operators';
-import {ResponseWrapper} from '../../models/response-wrapper';
-import {ActivatedRoute, Params} from '@angular/router';
-import {FastenDisplayModel} from '../../../lib/models/fasten/fasten-display-model';
-import {fhirModelFactory} from '../../../lib/models/factory';
-import {ResourceType} from '../../../lib/models/constants';
+import { forkJoin, Observable } from 'rxjs';
+import { map, mergeMap, switchMap } from 'rxjs/operators';
+import { ResponseWrapper } from '../../models/response-wrapper';
+import { ActivatedRoute, Params } from '@angular/router';
+import { FastenDisplayModel } from '../../../lib/models/fasten/fasten-display-model';
+import { fhirModelFactory } from '../../../lib/models/factory';
+import { ResourceType } from '../../../lib/models/constants';
+import { ObservationModel } from '../../../lib/models/resources/observation-model';
+import {
+  ColDef, GridApi, GridReadyEvent, RowClickedEvent,
+  GetRowIdParams, IsFullWidthRowParams, RowClassParams
+} from 'ag-grid-community';
+import { LabChartDetailComponent } from './lab-chart-detail.component';
 
-class ObservationGroup {[key: string]: ResourceFhir[]}
+class ObservationGroup { [key: string]: ResourceFhir[] }
 class ObservationGroupInfo {
   observationGroups: ObservationGroup = {}
-  observationGroupTitles: {[key: string]: string} = {}
+  observationGroupTitles: { [key: string]: string } = {}
 }
 class LabResultCodeByDate {
-  label: string //lab result coding (system|code)
-  value: string //lab result date
+  label: string
+  value: string
 }
 
+export interface LabRow {
+  type: 'data' | 'detail'
+  code: string
+  name: string
+  panel: string
+  result: string
+  date: Date | null
+  models: ObservationModel[]
+  onGlossaryToggle?: (code: string, open: boolean) => void
+}
 
 @Component({
   selector: 'app-report-labs',
@@ -30,24 +47,92 @@ class LabResultCodeByDate {
 export class ReportLabsComponent implements OnInit {
   loading: boolean = false
 
-  currentPage: number = 1 //1-based index due to the way the pagination component works
-  pageSize: number = 10
-  allObservationGroups: string[] = []
+  get isDarkMode(): boolean {
+    return document.body.classList.contains('dark-theme')
+  }
 
-
-  //diagnostic report data
+  // diagnostic report filter
   reportSourceId: string = ''
   reportResourceType: string = ''
   reportResourceId: string = ''
   reportDisplayModel: FastenDisplayModel = null
-
-  //currentPage data
-  observationGroups: ObservationGroup = {}
-  observationGroupTitles: {[key: string]: string} = {}
-
+  diagnosticReports: ResourceFhir[] = []
   isEmptyReport = false
 
-  diagnosticReports: ResourceFhir[] = []
+  // AG Grid
+  rowData: LabRow[] = []
+  private gridApi: GridApi
+  private expandedCodes: Set<string> = new Set()
+  private glossaryOpenMap: Map<string, boolean> = new Map()
+  // map from observation source_resource_id → panel name
+  private panelMap: Map<string, string> = new Map()
+
+  columnDefs: ColDef[] = [
+    {
+      headerName: 'Lab Name',
+      field: 'name',
+      filter: 'agTextColumnFilter',
+      filterParams: { buttons: ['reset'], debounceMs: 200 },
+      flex: 3,
+      cellRenderer: (params) => {
+        if (params.data?.type === 'detail') return ''
+        const isOpen = this.expandedCodes.has(params.data?.code)
+        return `<span style="cursor:pointer">${isOpen ? '▾' : '▸'} ${params.value || ''}</span>`
+      }
+    },
+    {
+      headerName: 'Panel',
+      field: 'panel',
+      filter: 'agTextColumnFilter',
+      filterParams: { buttons: ['reset'], debounceMs: 200 },
+      flex: 2,
+    },
+    {
+      headerName: 'Result',
+      field: 'result',
+      filter: false,
+      flex: 2,
+    },
+    {
+      headerName: 'Date',
+      field: 'date',
+      filter: 'agDateColumnFilter',
+      filterParams: {
+        buttons: ['reset'],
+        comparator: (filterDate: Date, cellValue: Date) => {
+          if (!cellValue) return -1
+          const cell = new Date(cellValue)
+          cell.setHours(0, 0, 0, 0)
+          if (cell < filterDate) return -1
+          if (cell > filterDate) return 1
+          return 0
+        }
+      },
+      valueFormatter: (p) => p.value
+        ? new Date(p.value).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+        : '',
+      flex: 2,
+    },
+  ]
+
+  defaultColDef: ColDef = {
+    sortable: false,
+    resizable: true,
+  }
+
+  // full-width detail row config
+  fullWidthCellRenderer = LabChartDetailComponent
+  isFullWidthRow = (params: IsFullWidthRowParams) => params.rowNode.data?.type === 'detail'
+  getRowId = (params: GetRowIdParams) => `${params.data.type}-${params.data.code}`
+  getRowClass = (params: RowClassParams) => params.data?.type === 'data' ? 'ag-row-clickable' : 'ag-row-detail-full'
+  getRowHeight = (params) => {
+    if (params.data?.type !== 'detail') return 42
+    const glossaryOpen = this.glossaryOpenMap.get(params.data?.code)
+    if (glossaryOpen) return 650
+    // base: padding + title + chart (scales with # of data points)
+    const pointCount = (params.data?.models?.length ?? 1)
+    return 100 + pointCount * 40 + 80
+  }
 
   constructor(
     private fastenApi: FastenApiService,
@@ -56,168 +141,271 @@ export class ReportLabsComponent implements OnInit {
 
   ngOnInit(): void {
     this.loading = true
-
     this.populateReports()
 
-
-    //determine if we're requesting all results or just a single report
-    //source_id/:resource_type/:resource_id
-
-    this.activatedRoute.params.subscribe((routeParams: Params) => {
-      this.reportSourceId = routeParams['source_id']
-      this.reportResourceType = routeParams['resource_type']
-      this.reportResourceId = routeParams['resource_id']
-
-      if(this.reportSourceId && this.reportResourceType && this.reportResourceId){
-        //we're requesting a single report
-        this.findLabResultCodesFilteredToReport(this.reportSourceId, this.reportResourceType, this.reportResourceId).subscribe((data) => {
-          this.allObservationGroups = data
-          this.currentPage = 1 //reset to first page when changing report
-          return this.populateObservationsForCurrentPage()
-        })
+    // build panel map first, then load observations so panels are available
+    this.activatedRoute.params.pipe(
+      switchMap((routeParams: Params) => {
+        this.reportSourceId = routeParams['source_id']
+        this.reportResourceType = routeParams['resource_type']
+        this.reportResourceId = routeParams['resource_id']
+        return this.buildPanelMap()
+      })
+    ).subscribe(() => {
+      if (this.reportSourceId && this.reportResourceType && this.reportResourceId) {
+        this.findLabResultCodesFilteredToReport(this.reportSourceId, this.reportResourceType, this.reportResourceId)
+          .subscribe((codes) => this.loadRowsForCodes(codes))
       } else {
         this.findLabResultCodesSortedByLatest().subscribe((data) => {
-          // this.loading = false
-          this.allObservationGroups = data.map((item) => item.label)
-          return this.populateObservationsForCurrentPage()
+          this.loadRowsForCodes(data.map((item) => item.label))
         })
       }
-    });
-
+    })
   }
 
-  //using the current list of allObservationGroups, retrieve a list of observations, group them by observationGroup, and set the observationGroupTitles
-  populateObservationsForCurrentPage(){
+  onGridReady(params: GridReadyEvent): void {
+    this.gridApi = params.api
+  }
 
-    let observationGroups = this.allObservationGroups.slice((this.currentPage-1) * this.pageSize, this.currentPage * this.pageSize)
+  onRowClicked(event: RowClickedEvent): void {
+    const data = event.data as LabRow
+    if (!data || data.type === 'detail') return
 
+    if (this.expandedCodes.has(data.code)) {
+      // collapse
+      this.expandedCodes.delete(data.code)
+      this.glossaryOpenMap.delete(data.code)
+      const removeRow = this.rowData.find(r => r.type === 'detail' && r.code === data.code)
+      if (removeRow) {
+        this.rowData = this.rowData.filter(r => r !== removeRow)
+        this.gridApi.applyTransaction({ remove: [removeRow] })
+      }
+    } else {
+      // expand: insert detail row immediately after this data row
+      this.expandedCodes.add(data.code)
+      const idx = this.rowData.findIndex(r => r.code === data.code && r.type === 'data')
+      if (idx >= 0) {
+        const detailRow: LabRow = {
+          // mirror parent's filterable fields so this row passes all active column filters
+          type: 'detail', code: data.code,
+          name: data.name, panel: data.panel,
+          result: data.result, date: data.date,
+          models: data.models,
+          onGlossaryToggle: (code, open) => {
+            this.glossaryOpenMap.set(code, open)
+            this.gridApi?.resetRowHeights()
+          }
+        }
+        this.rowData.splice(idx + 1, 0, detailRow)
+        this.gridApi.applyTransaction({ add: [detailRow], addIndex: idx + 1 })
+
+        // scroll so the chart is visible
+        setTimeout(() => {
+          const node = this.gridApi.getRowNode(`detail-${data.code}`)
+          if (node) this.gridApi.ensureNodeVisible(node, 'middle')
+        }, 50)
+      }
+    }
+    // refresh the data row so the arrow icon updates
+    this.gridApi?.refreshCells({ rowNodes: [event.node], force: true })
+  }
+
+  private loadRowsForCodes(codes: string[]): void {
     this.loading = true
-    this.getObservationsByCodes(observationGroups).subscribe((data) => {
+    this.getObservationsByCodes(codes).subscribe((info) => {
       this.loading = false
-      this.observationGroups = data.observationGroups
-      this.observationGroupTitles = data.observationGroupTitles
+      const rows: LabRow[] = []
 
-      this.isEmptyReport = !!!Object.keys(this.observationGroups).length
-    }, error => {
+      for (const code of Object.keys(info.observationGroups)) {
+        const sorted = [...(info.observationGroups[code] || [])].sort(
+          (a, b) => a.sort_date > b.sort_date ? -1 : a.sort_date < b.sort_date ? 1 : 0
+        )
+        const models = sorted.map(ob => new ObservationModel(ob.resource_raw))
+        const latest = models[0]
+
+        // find panel via the most recent observation's source_resource_id
+        const panel = sorted.reduce((found, obs) => {
+          return found || this.panelMap.get(obs.source_resource_id) || ''
+        }, '')
+
+        rows.push({
+          type: 'data',
+          code,
+          name: info.observationGroupTitles[code] || code,
+          panel: panel ? this.toTitleCase(panel) : '',
+          result: latest?.value_model ? latest.value_model.display() : '—',
+          date: latest?.effective_date ? new Date(latest.effective_date) : null,
+          models,
+        })
+      }
+
+      rows.sort((a, b) => {
+        if (!a.date && !b.date) return 0
+        if (!a.date) return 1
+        if (!b.date) return -1
+        return b.date.getTime() - a.date.getTime()
+      })
+
+      this.rowData = rows
+      this.expandedCodes = new Set()
+      this.isEmptyReport = rows.length === 0
+    }, () => {
       this.loading = false
       this.isEmptyReport = true
     })
-
   }
 
-  //get a list of all lab codes associated with a diagnostic report
+  // get a list of all lab codes associated with a diagnostic report
   findLabResultCodesFilteredToReport(sourceId, resourceType, resourceId): Observable<any[]> {
     return this.fastenApi.getResources(resourceType, sourceId, resourceId)
       .pipe(
         mergeMap((diagnosticReports) => {
-          let diagnosticReport = diagnosticReports?.[0]
+          const diagnosticReport = diagnosticReports?.[0]
           this.reportDisplayModel = fhirModelFactory(diagnosticReport.source_resource_type as ResourceType, diagnosticReport)
-
-
-          //get a list of all the observations associated with this report
-          let observationIds = fhirpath.evaluate(diagnosticReport.resource_raw, "DiagnosticReport.result.reference")
-
-          //request each observation, and find the lab codes associated with each
-          let requests = []
-          for(let observationId of observationIds){
-            let observationIdParts = observationId.split("/")
-            requests.push(this.fastenApi.getResources(observationIdParts[0], diagnosticReport.source_id, observationIdParts[1]))
-          }
-
+          const observationIds = fhirpath.evaluate(diagnosticReport.resource_raw, "DiagnosticReport.result.reference")
+          const requests = observationIds.map(id => {
+            const parts = id.split("/")
+            return this.fastenApi.getResources(parts[0], diagnosticReport.source_id, parts[1])
+          })
           return forkJoin(requests)
         }),
-        map((results:ResourceFhir[][]) => {
-          let allObservationGroups = []
-
-          //for each result, loop through the observations and find the loinc code
-          for(let result of results){
-            for(let observation of result){
-              let observationGroup = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(system='http://loinc.org').first().code")[0]
-              allObservationGroups.push('http://loinc.org|' + observationGroup)
+        map((results: ResourceFhir[][]) => {
+          const allCodes = []
+          for (const result of results) {
+            for (const observation of result) {
+              const code = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(system='http://loinc.org').first().code")[0]
+              allCodes.push('http://loinc.org|' + code)
             }
           }
-          return allObservationGroups
+          return allCodes
         })
       )
   }
 
-  //get a list of all unique lab codes ordered by latest date
+  // get a list of all unique lab codes ordered by latest date
   findLabResultCodesSortedByLatest(): Observable<LabResultCodeByDate[]> {
     return this.fastenApi.queryResources({
       select: [],
       from: "Observation",
-      where: {
-        "code": "http://loinc.org|,urn:oid:2.16.840.1.113883.6.1|",
-      },
+      where: { "code": "http://loinc.org|,urn:oid:2.16.840.1.113883.6.1|" },
       aggregations: {
-        order_by: {
-          field: "sort_date",
-          fn: "max"
-        },
-        group_by: {
-          field: "code",
-        }
+        order_by: { field: "sort_date", fn: "max" },
+        group_by: { field: "code" }
       }
-    })
-    .pipe(
-        map((response: ResponseWrapper) => {
-          return response.data as LabResultCodeByDate[]
-        }),
-    )
+    }).pipe(map((response: ResponseWrapper) => response.data as LabResultCodeByDate[]))
   }
 
-
-  //get a list of the last 10 lab results
-  populateReports(){
+  // get the last 10 diagnostic reports for the dropdown
+  populateReports() {
     return this.fastenApi.queryResources({
       select: ["*"],
       from: "DiagnosticReport",
-      where: {
-        "category": "http://terminology.hl7.org/CodeSystem/v2-0074|LAB",
-      },
+      where: { "category": "http://terminology.hl7.org/CodeSystem/v2-0074|LAB" },
       limit: 10,
     }).subscribe(results => {
       this.diagnosticReports = results.data
     })
   }
 
-  isEmpty(obj: any) {
-    return Object.keys(obj).length === 0;
+  // build a map from observation source_resource_id → panel name using DiagnosticReport links
+  private buildPanelMap(): Observable<void> {
+    return this.fastenApi.queryResources({
+      select: ['*'],
+      from: 'DiagnosticReport',
+      where: { 'category': 'http://terminology.hl7.org/CodeSystem/v2-0074|LAB' },
+      limit: 500,
+    }).pipe(
+      map((response: ResponseWrapper) => {
+        const map = new Map<string, string>()
+        for (const dr of (response.data || [])) {
+          const panelName = fhirpath.evaluate(dr.resource_raw, 'DiagnosticReport.code.text')[0]
+            || fhirpath.evaluate(dr.resource_raw, 'DiagnosticReport.code.coding.first().display')[0]
+          if (!panelName) continue
+          const refs: string[] = fhirpath.evaluate(dr.resource_raw, 'DiagnosticReport.result.reference')
+          for (const ref of refs) {
+            const obsId = ref.split('/').pop()
+            if (obsId && !map.has(obsId)) map.set(obsId, panelName)
+          }
+        }
+        this.panelMap = map
+      })
+    )
   }
 
-  //private methods
+  // Bound handler passed to report-header's [customPdfExport]
+  labsPdfExport = () => this.exportFilteredPdf()
 
-  //get a list of observations that have a matching code
-  private getObservationsByCodes(codes: string[]): Observable<ObservationGroupInfo>{
+  exportFilteredPdf(): void {
+    if (!this.gridApi) return
+
+    // Collect only data rows that survive the current filter
+    const rows: LabRow[] = []
+    this.gridApi.forEachNodeAfterFilter(node => {
+      if (node.data?.type === 'data') rows.push(node.data as LabRow)
+    })
+
+    const doc = new jsPDF({ orientation: 'landscape' })
+
+    // Title
+    doc.setFontSize(16)
+    doc.text('Lab Results', 14, 16)
+    doc.setFontSize(10)
+    doc.setTextColor(120)
+    const filterActive = rows.length < this.rowData.filter(r => r.type === 'data').length
+    doc.text(
+      filterActive ? `Filtered: ${rows.length} of ${this.rowData.filter(r => r.type === 'data').length} labs` : `${rows.length} labs`,
+      14, 22
+    )
+    doc.text(`Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 14, 28)
+
+    autoTable(doc, {
+      startY: 34,
+      head: [['Lab Name', 'Panel', 'Result', 'Date']],
+      body: rows.map(r => [
+        r.name,
+        r.panel || '—',
+        r.result || '—',
+        r.date ? new Date(r.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
+      ]),
+      headStyles: { fillColor: [79, 70, 229], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [245, 247, 255] },
+      styles: { fontSize: 9, cellPadding: 4 },
+      columnStyles: { 0: { cellWidth: 80 }, 1: { cellWidth: 70 }, 2: { cellWidth: 50 } }
+    })
+
+    doc.save(`lab-results${filterActive ? '-filtered' : ''}.pdf`)
+  }
+
+  private toTitleCase(str: string): string {
+    return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
+  }
+
+  // get all observations matching a set of codes
+  private getObservationsByCodes(codes: string[]): Observable<ObservationGroupInfo> {
     return this.fastenApi.queryResources({
       select: [],
       from: "Observation",
-      where: {
-        "code": codes.join(","),
-      }
+      where: { "code": codes.join(",") }
     }).pipe(
       map((response: ResponseWrapper) => {
+        const observationGroups: ObservationGroup = {}
+        const observationGroupTitles: { [key: string]: string } = {}
 
-        let observationGroups: ObservationGroup = {}
-        let observationGroupTitles: {[key: string]: string} = {}
+        for (const observation of response.data) {
+          const code = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(system='http://loinc.org').first().code")[0]
+          observationGroups[code] = observationGroups[code] || []
+          observationGroups[code].push(observation)
 
-        //loop though all observations, group by "code.system": "http://loinc.org"
-        for(let observation of response.data){
-          let observationGroup = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(system='http://loinc.org').first().code")[0]
-          observationGroups[observationGroup] = observationGroups[observationGroup] ? observationGroups[observationGroup] : []
-          observationGroups[observationGroup].push(observation)
-
-          if(!observationGroupTitles[observationGroup]){
-            observationGroupTitles[observationGroup] = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(system='http://loinc.org').first().display")[0]
+          if (!observationGroupTitles[code]) {
+            let title = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(system='http://loinc.org').first().display")[0]
+            if (!title) title = fhirpath.evaluate(observation.resource_raw, "Observation.code.coding.where(display.exists()).first().display")[0]
+            if (!title) title = fhirpath.evaluate(observation.resource_raw, "Observation.code.text")[0]
+            observationGroupTitles[code] = title
           }
         }
 
-        return {
-          observationGroups: observationGroups,
-          observationGroupTitles: observationGroupTitles
-        }
+        return { observationGroups, observationGroupTitles }
       })
-    );
+    )
   }
-
 }

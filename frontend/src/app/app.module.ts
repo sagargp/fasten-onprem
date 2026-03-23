@@ -39,6 +39,8 @@ import {FhirCardModule} from './components/fhir-card/fhir-card.module';
 import {FhirDatatableModule} from './components/fhir-datatable/fhir-datatable.module';
 import { AuthSignupWizardComponent } from './pages/auth-signup-wizard/auth-signup-wizard.component';
 import { IconsModule } from './icon-module';
+import { AgGridModule } from 'ag-grid-angular';
+import { LabChartDetailComponent } from './pages/report-labs/lab-chart-detail.component';
 import { UserListComponent } from './pages/user-list/user-list.component';
 import { PractitionerHistoryComponent } from './pages/practitioner-history/practitioner-history.component';
 import { SettingsComponent } from './pages/settings/settings.component';
@@ -60,6 +62,7 @@ import { GetEncryptionKeyWizardComponent } from './pages/get-encryption-key-wiza
     PatientProfileComponent,
     MedicalHistoryComponent,
     ReportLabsComponent,
+    LabChartDetailComponent,
     ResourceCreatorComponent,
     ExploreComponent,
     DesktopCallbackComponent,
@@ -90,6 +93,7 @@ import { GetEncryptionKeyWizardComponent } from './pages/get-encryption-key-wiza
     WidgetsModule,
     DirectivesModule,
     IconsModule,
+    AgGridModule,
   ],
   providers: [
     {

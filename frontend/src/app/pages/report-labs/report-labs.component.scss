@@ -1,0 +1,23 @@
+.ag-row-clickable {
+  cursor: pointer;
+}
+
+.ag-row-clickable:hover {
+  background-color: #f0f4ff !important;
+}
+
+.ag-row-detail-full {
+  border-top: none !important;
+  background-color: #f8f9fa !important;
+}
+
+// Dark mode overrides
+:host-context(.dark-theme) {
+  .ag-row-clickable:hover {
+    background-color: #2a3550 !important;
+  }
+
+  .ag-row-detail-full {
+    background-color: #1a2035 !important;
+  }
+}
