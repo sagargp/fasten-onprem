@@ -6,6 +6,7 @@ import { ResourceFhir } from '../../models/fasten/resource_fhir';
 import * as fhirpath from 'fhirpath';
 import { forkJoin, Observable } from 'rxjs';
 import { map, mergeMap, switchMap } from 'rxjs/operators';
+import { Source } from '../../models/fasten/source';
 import { ResponseWrapper } from '../../models/response-wrapper';
 import { ActivatedRoute, Params } from '@angular/router';
 import { FastenDisplayModel } from '../../../lib/models/fasten/fasten-display-model';
@@ -35,6 +36,8 @@ export interface LabRow {
   result: string
   date: Date | null
   models: ObservationModel[]
+  source: string
+  flag: 'H' | 'L' | ''
   isExpanded?: boolean
   glossaryOpen?: boolean
 }
@@ -67,6 +70,8 @@ export class ReportLabsComponent implements OnInit {
   pageSizeOptions: number[] = [15, 25, 50, 100, 250]
   // map from observation source_resource_id → panel name
   private panelMap: Map<string, string> = new Map()
+  // map from source_id → human-readable source name
+  private sourceMap: Map<string, string> = new Map()
 
   columnDefs: ColDef[] = [
     {
@@ -77,8 +82,8 @@ export class ReportLabsComponent implements OnInit {
       flex: 3,
       cellRenderer: LabChartDetailComponent,
       cellStyle: { padding: '0', overflow: 'hidden' },
-      // When expanded, span all 4 columns so the chart fills the full row width
-      colSpan: (params) => params.data?.isExpanded ? 4 : 1,
+      // When expanded, span all 6 columns so the chart fills the full row width
+      colSpan: (params) => params.data?.isExpanded ? 6 : 1,
     },
     {
       headerName: 'Panel',
@@ -92,6 +97,26 @@ export class ReportLabsComponent implements OnInit {
       field: 'result',
       filter: false,
       flex: 2,
+    },
+    {
+      headerName: 'Source',
+      field: 'source',
+      filter: 'agTextColumnFilter',
+      filterParams: { buttons: ['reset'], debounceMs: 200 },
+      flex: 2,
+    },
+    {
+      headerName: 'Flag',
+      field: 'flag',
+      filter: false,
+      sortable: true,
+      flex: 1,
+      cellRenderer: (params) => {
+        const flag = params.value
+        if (flag === 'H') return `<span style="color:#b91c1c;font-weight:600;font-size:12px">▲ H</span>`
+        if (flag === 'L') return `<span style="color:#1d4ed8;font-weight:600;font-size:12px">▼ L</span>`
+        return ''
+      },
     },
     {
       headerName: 'Date',
@@ -138,13 +163,13 @@ export class ReportLabsComponent implements OnInit {
     this.loading = true
     this.populateReports()
 
-    // build panel map first, then load observations so panels are available
+    // build panel + source maps first, then load observations
     this.activatedRoute.params.pipe(
       switchMap((routeParams: Params) => {
         this.reportSourceId = routeParams['source_id']
         this.reportResourceType = routeParams['resource_type']
         this.reportResourceId = routeParams['resource_id']
-        return this.buildPanelMap()
+        return forkJoin([this.buildPanelMap(), this.buildSourceMap()])
       })
     ).subscribe(() => {
       if (this.reportSourceId && this.reportResourceType && this.reportResourceId) {
@@ -198,6 +223,19 @@ export class ReportLabsComponent implements OnInit {
           return found || this.panelMap.get(obs.source_resource_id) || ''
         }, '')
 
+        // source: use the most recent observation's source_id
+        const sourceId = sorted[0]?.source_id || ''
+        const source = this.sourceMap.get(sourceId) || ''
+
+        // flag: compare latest numeric value against reference range
+        const numericValue = (latest?.value_model as any)?.value as number | undefined
+        const refRange = latest?.reference_range
+        let flag: 'H' | 'L' | '' = ''
+        if (numericValue != null && refRange) {
+          if (refRange.high_value != null && numericValue > refRange.high_value) flag = 'H'
+          else if (refRange.low_value != null && numericValue < refRange.low_value) flag = 'L'
+        }
+
         rows.push({
           code,
           name: info.observationGroupTitles[code] || code,
@@ -205,6 +243,8 @@ export class ReportLabsComponent implements OnInit {
           result: latest?.value_model ? latest.value_model.display() : '—',
           date: latest?.effective_date ? new Date(latest.effective_date) : null,
           models,
+          source,
+          flag,
         })
       }
 
@@ -300,6 +340,20 @@ export class ReportLabsComponent implements OnInit {
     )
   }
 
+  // build a map from source_id → human-readable name using the Source display or brand_id
+  private buildSourceMap(): Observable<void> {
+    return this.fastenApi.getSources().pipe(
+      map((sources: Source[]) => {
+        const map = new Map<string, string>()
+        for (const s of (sources || [])) {
+          const name = s.display || (s.brand_id ? this.toTitleCase(s.brand_id.replace(/-/g, ' ')) : '')
+          if (s.id && name) map.set(s.id, name)
+        }
+        this.sourceMap = map
+      })
+    )
+  }
+
   // Bound handler passed to report-header's [customPdfExport]
   labsPdfExport = () => this.exportFilteredPdf()
 
@@ -328,17 +382,19 @@ export class ReportLabsComponent implements OnInit {
 
     autoTable(doc, {
       startY: 34,
-      head: [['Lab Name', 'Panel', 'Result', 'Date']],
+      head: [['Lab Name', 'Panel', 'Result', 'Source', 'Flag', 'Date']],
       body: rows.map(r => [
         r.name,
         r.panel || '—',
         r.result || '—',
+        r.source || '—',
+        r.flag || '',
         r.date ? new Date(r.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
       ]),
       headStyles: { fillColor: [79, 70, 229], textColor: 255, fontStyle: 'bold' },
       alternateRowStyles: { fillColor: [245, 247, 255] },
       styles: { fontSize: 9, cellPadding: 4 },
-      columnStyles: { 0: { cellWidth: 80 }, 1: { cellWidth: 70 }, 2: { cellWidth: 50 } }
+      columnStyles: { 0: { cellWidth: 70 }, 1: { cellWidth: 55 }, 2: { cellWidth: 40 }, 3: { cellWidth: 45 }, 4: { cellWidth: 15 } }
     })
 
     doc.save(`lab-results${filterActive ? '-filtered' : ''}.pdf`)
